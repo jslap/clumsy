@@ -179,17 +179,17 @@ static int sendAllListPackets() {
                 }
                 resent = DivertSend(divertHandle, pnode->packet, pnode->packetLen, &(pnode->addr), &sendLen);
                 LOG("Resend failed inbound ICMP packets as outbound: %s", resent ? "SUCCESS" : "FAIL");
-                InterlockedExchange16(&sendState, SEND_STATUS_SEND);
+                _InterlockedExchange16(&sendState, SEND_STATUS_SEND);
             } else {
-                InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
+                _InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
             }
         } else {
             if (sendLen < pnode->packetLen) {
                 // TODO don't know how this can happen, or it needs to be resend like good old UDP packet
                 LOG("Internal Error: DivertSend truncated send packet.");
-                InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
+                _InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
             } else {
-                InterlockedExchange16(&sendState, SEND_STATUS_SEND);
+                _InterlockedExchange16(&sendState, SEND_STATUS_SEND);
             }
         }
 
@@ -217,7 +217,7 @@ static void divertConsumeStep() {
                 module->lastEnabled = 1;
             }
             if (module->process(head, tail)) {
-                InterlockedIncrement16(&(module->processTriggered));
+                _InterlockedIncrement16(&(module->processTriggered));
             }
         } else {
             if (module->lastEnabled) {
@@ -252,7 +252,7 @@ static DWORD divertClockLoop(LPVOID arg) {
                 divertConsumeStep();
                 /***************** leave critical region ************************/
                 if (!ReleaseMutex(mutex)) {
-                    InterlockedIncrement16(&stopLooping);
+                    _InterlockedIncrement16(&stopLooping);
                     LOG("Fatal: Failed to release mutex (%lu)", GetLastError());
                     ABORT();
                 }
@@ -269,11 +269,11 @@ static DWORD divertClockLoop(LPVOID arg) {
                 break;
             case WAIT_ABANDONED:
                 LOG("Aquired abandoned mutex");
-                InterlockedIncrement16(&stopLooping);
+                _InterlockedIncrement16(&stopLooping);
                 break;
             case WAIT_FAILED:
                 LOG("Aquire failed (%lu)", GetLastError());
-                InterlockedIncrement16(&stopLooping);
+                _InterlockedIncrement16(&stopLooping);
                 break;
         }
 
@@ -390,7 +390,7 @@ void divertStop() {
     threads[1] = clockThread;
 
     LOG("Stopping...");
-    InterlockedIncrement16(&stopLooping);
+    _InterlockedIncrement16(&stopLooping);
     WaitForMultipleObjects(2, threads, TRUE, INFINITE);
 
     LOG("Successfully waited threads and stopped.");
