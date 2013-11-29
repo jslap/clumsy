@@ -9,12 +9,13 @@
 
 // ! the order decides which module get processed first
 Module* modules[MODULE_CNT] = {
-    &lagModule,
-    &dropModule,
-    &throttleModule,
-    &dupModule,
-    &oodModule,
-    &tamperModule
+	&lagModule,
+	&BWLimiterModule,
+	&dropModule,
+	&throttleModule,
+	&dupModule,
+	&oodModule,
+	&tamperModule
 };
 
 volatile short sendState = SEND_STATUS_NONE;
@@ -322,10 +323,10 @@ static int uiToggleControls(Ihandle *ih, int state) {
     int controlsActive = IupGetInt(controls, "ACTIVE");
     if (controlsActive && !state) {
         IupSetAttribute(controls, "ACTIVE", "NO");
-        _InterlockedExchange16(target, (short)state);
+        InterlockedExchange16(target, (short)state);
     } else if (!controlsActive && state) {
         IupSetAttribute(controls, "ACTIVE", "YES");
-        _InterlockedExchange16(target, (short)state);
+        InterlockedExchange16(target, (short)state);
     }
 
     return IUP_DEFAULT;
@@ -337,7 +338,7 @@ static int uiTimerCb(Ihandle *ih) {
     for (ix = 0; ix < MODULE_CNT; ++ix) {
         if (modules[ix]->processTriggered) {
             IupSetAttribute(modules[ix]->iconHandle, "IMAGE", "doing_icon");
-            _InterlockedAnd16(&(modules[ix]->processTriggered), 0);
+            InterlockedAnd16(&(modules[ix]->processTriggered), 0);
         } else {
             IupSetAttribute(modules[ix]->iconHandle, "IMAGE", "none_icon");
         }
@@ -351,11 +352,11 @@ static int uiTimerCb(Ihandle *ih) {
         break;
     case SEND_STATUS_SEND:
         IupSetAttribute(stateIcon, "IMAGE", "doing_icon");
-        _InterlockedAnd16(&sendState, SEND_STATUS_NONE);
+        InterlockedAnd16(&sendState, SEND_STATUS_NONE);
         break;
     case SEND_STATUS_FAIL:
         IupSetAttribute(stateIcon, "IMAGE", "error_icon");
-        _InterlockedAnd16(&sendState, SEND_STATUS_NONE);
+        InterlockedAnd16(&sendState, SEND_STATUS_NONE);
         break;
     }
 

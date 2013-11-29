@@ -43,13 +43,13 @@ int uiSyncChance(Ihandle *ih) {
         IupStoreAttribute(ih, "CARET", "10");
     }
     // and sync chance value
-    _InterlockedExchange16(chancePtr, (short)(newValue * 10));
+    InterlockedExchange16(chancePtr, (short)(newValue * 10));
     return IUP_DEFAULT;
 }
 
 int uiSyncToggle(Ihandle *ih, int state) {
     short *togglePtr = (short*)IupGetAttribute(ih, SYNCED_VALUE);
-    _InterlockedExchange16(togglePtr, (short)state);
+    InterlockedExchange16(togglePtr, (short)state);
     return IUP_DEFAULT;
 }
 
@@ -73,7 +73,7 @@ int uiSyncInteger(Ihandle *ih) {
         IupStoreAttribute(ih, "CARET", "10");
     }
     // sync back
-    _InterlockedExchange16(integerPointer, (short)newValue);
+    InterlockedExchange16(integerPointer, (short)newValue);
     return IUP_DEFAULT;
 }
 

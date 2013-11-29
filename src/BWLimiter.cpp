@@ -1,25 +1,64 @@
-// throttling packets
+// BWLimiter packets
+#include <deque>
+
+extern "C"
+{
+
 #include "iup.h"
 #include "common.h"
-#define TIME_MIN "0"
-#define TIME_MAX "1000"
-#define TIME_DEFAULT 30
+}
+
+
+#define BW_MIN "1"
+#define BW_MAX "1000000"
+#define BW_DEFAULT 10
+
+#define BW_QUEUESIZE_MIN "10"
+#define BW_QUEUESIZE_MAX "1000"
+#define BW_QUEUESIZE_DEFAULT 100
+
 // threshold for how many packet to throttle at most
 #define KEEP_AT_MOST 1000
 
-static Ihandle *inboundCheckbox, *outboundCheckbox, *chanceInput, *frameInput;
+static Ihandle  *inboundCheckbox, *outboundCheckbox, *BWmaxInput, *BWQueueSize;
 
-static volatile short throttleEnabled = 0,
-    throttleInbound = 1, throttleOutbound = 1,
-    chance = 100, // [0-1000]
-    // time frame in ms, when a throttle start the packets within the time 
-    // will be queued and sent altogether when time is over
-    throttleFrame = TIME_DEFAULT; 
+static volatile short BWLimiterEnabled = 0,
+	BWLimiterInbound = 1, BWLimiterOutbound = 1,
+	BWMaxValue = BW_DEFAULT,
+BWQueueSizeValue = BW_QUEUESIZE_DEFAULT
+	 ; 
 
-static PacketNode throttleHeadNode = {0}, throttleTailNode = {0};
-static PacketNode *bufHead = &throttleHeadNode, *bufTail = &throttleTailNode;
+static PacketNode BWLimiterHeadNode = {0}, BWLimiterTailNode = {0};
+static PacketNode *bufHead = &BWLimiterHeadNode, *bufTail = &BWLimiterTailNode;
 static int bufSize = 0;
-static DWORD throttleStartTick = 0;
+static DWORD bufSizeByte = 0;
+static DWORD BWLimiterStartTick = 0;
+
+// pair of time, packet size.
+const DWORD TimerGranularity = 35;
+static std::deque< std::pair <DWORD, DWORD> > LastSentPackets;
+static DWORD TotalLastSentPackets;
+
+static INLINE_FUNCTION short canSendPacket(DWORD curTime)
+{
+	while (!LastSentPackets.empty() && LastSentPackets.front().first + TimerGranularity < curTime)
+	{
+		TotalLastSentPackets -= LastSentPackets.front().second;
+		LastSentPackets.pop_front();
+	}
+
+	DWORD curBwUse = ((TotalLastSentPackets*1000)/(TimerGranularity));
+	DWORD MaxBW = (DWORD)BWMaxValue*1024;
+	LOG("curTotal(%d): %d curBwUse : %d max: %d", (int)LastSentPackets.size(), (int)TotalLastSentPackets, (int)curBwUse, (int)MaxBW);
+	return ( curBwUse < MaxBW );
+}
+
+static INLINE_FUNCTION void recordSentPacket(DWORD curTime, DWORD packSize)
+{
+	LastSentPackets.push_back(std::make_pair(curTime, packSize));
+	TotalLastSentPackets += packSize;
+}
+
 
 static INLINE_FUNCTION short isBufEmpty() {
     short ret = bufHead->next == bufTail;
@@ -27,111 +66,133 @@ static INLINE_FUNCTION short isBufEmpty() {
     return ret;
 }
 
-static Ihandle *throttleSetupUI() {
-    Ihandle *throttleControlsBox = IupHbox(
-        IupLabel("Timeframe(ms):"),
-        frameInput = IupText(NULL),
-        inboundCheckbox = IupToggle("Inbound", NULL),
-        outboundCheckbox = IupToggle("Outbound", NULL),
-        IupLabel("Chance(%):"),
-        chanceInput = IupText(NULL),
+static Ihandle *BWLimiterSetupUI() {
+
+    Ihandle *BWLimiterControlsBox = IupHbox(
+        IupLabel("Max BW(Kb):"),
+        BWmaxInput = IupText(NULL),
+		  inboundCheckbox = IupToggle("Inbound", NULL),
+		  outboundCheckbox = IupToggle("Outbound", NULL),
+		  IupLabel("Q Size(Kb):"),
+		  BWQueueSize = IupText(NULL),
         NULL
         );
 
-    IupSetAttribute(chanceInput, "VISIBLECOLUMNS", "4");
-    IupSetAttribute(chanceInput, "VALUE", "10.0");
-    IupSetCallback(chanceInput, "VALUECHANGED_CB", uiSyncChance);
-    IupSetAttribute(chanceInput, SYNCED_VALUE, (char*)&chance);
-    IupSetCallback(inboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
-    IupSetAttribute(inboundCheckbox, SYNCED_VALUE, (char*)&throttleInbound);
-    IupSetCallback(outboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
-    IupSetAttribute(outboundCheckbox, SYNCED_VALUE, (char*)&throttleOutbound);
-    // sync throttle packet number
-    IupSetAttribute(frameInput, "VISIBLECOLUMNS", "3");
-    IupSetAttribute(frameInput, "VALUE", STR(TIME_DEFAULT));
-    IupSetCallback(frameInput, "VALUECHANGED_CB", (Icallback)uiSyncInteger);
-    IupSetAttribute(frameInput, SYNCED_VALUE, (char*)&throttleFrame);
-    IupSetAttribute(frameInput, INTEGER_MAX, TIME_MAX);
-    IupSetAttribute(frameInput, INTEGER_MIN, TIME_MIN);
+	 // sync BWLimiter packet number
+	 IupSetAttribute(BWmaxInput, "VISIBLECOLUMNS", "3");
+	 IupSetAttribute(BWmaxInput, "VALUE", STR(BW_DEFAULT));
+	 IupSetCallback(BWmaxInput, "VALUECHANGED_CB", (Icallback)uiSyncInteger);
+	 IupSetAttribute(BWmaxInput, SYNCED_VALUE, (char*)&BWMaxValue);
+	 IupSetAttribute(BWmaxInput, INTEGER_MAX, BW_MAX);
+	 IupSetAttribute(BWmaxInput, INTEGER_MIN, BW_MIN);
 
-    // enable by default to avoid confusing
-    IupSetAttribute(inboundCheckbox, "VALUE", "ON");
-    IupSetAttribute(outboundCheckbox, "VALUE", "ON");
+	 IupSetCallback(inboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
+	 IupSetAttribute(inboundCheckbox, SYNCED_VALUE, (char*)&BWLimiterInbound);
+	 IupSetCallback(outboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
+	 IupSetAttribute(outboundCheckbox, SYNCED_VALUE, (char*)&BWLimiterOutbound);
+	 
+	 // sync BWLimiter packet number
+	 IupSetAttribute(BWQueueSize, "VISIBLECOLUMNS", "3");
+	 IupSetAttribute(BWQueueSize, "VALUE", STR(BW_QUEUESIZE_DEFAULT));
+	 IupSetCallback(BWQueueSize, "VALUECHANGED_CB", (Icallback)uiSyncInteger);
+	 IupSetAttribute(BWQueueSize, SYNCED_VALUE, (char*)&BWQueueSizeValue);
+	 IupSetAttribute(BWQueueSize, INTEGER_MAX, BW_QUEUESIZE_MAX);
+	 IupSetAttribute(BWQueueSize, INTEGER_MIN, BW_QUEUESIZE_MIN);
 
-    return throttleControlsBox;
+
+
+    return BWLimiterControlsBox;
 }
 
-static void throttleStartUp() {
-    if (bufHead->next == NULL && bufTail->next == NULL) {
-        bufHead->next = bufTail;
-        bufTail->prev = bufHead;
-        bufSize = 0;
-    } else {
-        assert(isBufEmpty());
-    }
-    throttleStartTick = 0;
-    startTimePeriod();
+static void BWLimiterStartUp() 
+{
+	if (bufHead->next == NULL && bufTail->next == NULL) {
+		bufHead->next = bufTail;
+		bufTail->prev = bufHead;
+		bufSize = 0;
+	} else {
+		assert(isBufEmpty());
+	}
+	BWLimiterStartTick = 0;
+	startTimePeriod();
 }
 
 static void clearBufPackets(PacketNode *tail) {
     PacketNode *oldLast = tail->prev;
     LOG("Throttled end, send all %d packets. Buffer at max: %s", bufSize, bufSize == KEEP_AT_MOST ? "YES" : "NO");
     while (!isBufEmpty()) {
+		 bufSizeByte -= bufTail->prev->packetLen;
         insertAfter(popNode(bufTail->prev), oldLast);
         --bufSize;
     }
-    throttleStartTick = 0;
+    BWLimiterStartTick = 0;
 }
 
-static void throttleCloseDown(PacketNode *head, PacketNode *tail) {
-    UNREFERENCED_PARAMETER(tail);
-    UNREFERENCED_PARAMETER(head);
-    clearBufPackets(tail);
-    endTimePeriod();
+static void BWLimiterCloseDown(PacketNode *head, PacketNode *tail)
+{
+	UNREFERENCED_PARAMETER(tail);
+	UNREFERENCED_PARAMETER(head);
+	clearBufPackets(tail);
+	endTimePeriod();
 }
 
-static short throttleProcess(PacketNode *head, PacketNode *tail) {
-    short throttled = FALSE;
-    UNREFERENCED_PARAMETER(head);
-    if (!throttleStartTick) {
-        if (!isListEmpty() && calcChance(chance)) {
-            LOG("Start new throttling w/ chance %.1f, time frame: %d", chance/10.0, throttleFrame);
-            throttleStartTick = timeGetTime();
-            throttled = TRUE;
-            goto THROTTLE_START; // need this goto since maybe we'll start and stop at this single call
-        }
-    } else {
-THROTTLE_START:
-        // start a block for declaring local variables
-        {
-            // already throttling, keep filling up
-            PacketNode *pac = tail->prev;
-            DWORD currentTick = timeGetTime();
-            while (bufSize < KEEP_AT_MOST && pac != head) {
-                if (checkDirection(pac->addr.Direction, throttleInbound, throttleOutbound)) {
-                    insertAfter(popNode(pac), bufHead);
-                    ++bufSize;
-                    pac = tail->prev;
-                } else {
-                    pac = pac->prev;
-                }
-            }
+static short BWLimiterProcess(PacketNode *head, PacketNode *tail)
+{
+	int dropped = 0;
 
-            // send all when throttled enough, including in current step
-            if (bufSize >= KEEP_AT_MOST || (currentTick - throttleStartTick > (unsigned int)throttleFrame)) {
-                clearBufPackets(tail);
-            }
-        }
-    }
+	DWORD currentTime = timeGetTime();
+	PacketNode *pac = tail->prev;
+	// pick up all packets and fill in the current time
+	while (pac != head) 
+	{
+		if (checkDirection(pac->addr.Direction, BWLimiterInbound, BWLimiterOutbound)) 
+		{
+			if ( bufSizeByte >= ((DWORD)BWQueueSizeValue*1024))
+			{
+				LOG("droped with chance, direction %s",
+					BOUND_TEXT(pac->addr.Direction));
+				freeNode(popNode(pac));
+				++dropped;
+			}
+			else
+			{
+				insertAfter(popNode(pac), bufHead)->timestamp = timeGetTime();
+				++bufSize;
+				bufSizeByte += pac->packetLen;
+				pac = tail->prev;
+			}
+		} 
+		else 
+		{
+			pac = pac->prev;
+		}
+	}
 
-    return throttled;
+
+	while (!isBufEmpty() && canSendPacket(currentTime))
+	{
+		PacketNode *pac = bufTail->prev;
+		bufSizeByte -= pac->packetLen;
+		recordSentPacket(currentTime, pac->packetLen);
+		insertAfter(popNode(bufTail->prev), head); 
+		--bufSize;
+	}
+
+	if (bufSize > 0)
+	{
+		LOG("Queued buffers : %d",
+			bufSize);
+	}
+
+
+	return (bufSize>0) || (dropped>0);
 }
 
-Module throttleModule = {
-    "Throttle",
-    (short*)&throttleEnabled,
-    throttleSetupUI,
-    throttleStartUp,
-    throttleCloseDown,
-    throttleProcess
+Module BWLimiterModule = {
+    "BW Limit",
+    (short*)&BWLimiterEnabled,
+    BWLimiterSetupUI,
+    BWLimiterStartUp,
+    BWLimiterCloseDown,
+    BWLimiterProcess
 };

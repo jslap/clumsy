@@ -8,7 +8,7 @@
 #define MSG_BUFSIZE 512
 #define FILTER_BUFSIZE 1024
 #define NAME_SIZE 16
-#define MODULE_CNT 6
+#define MODULE_CNT 7
 #define ICON_UPDATE_MS 200
 
 #define CONTROLS_HANDLE "__CONTROLS_HANDLE"
@@ -42,6 +42,23 @@
 #undef InterlockedIncrement16
 #endif
 #define InterlockedIncrement16(p) (__atomic_add_fetch((short*)(p), 1, __ATOMIC_SEQ_CST))
+#elif defined(WIN32)
+
+#ifdef InterlockedAnd16
+#undef InterlockedAnd16
+#endif
+#define InterlockedAnd16(p, val) _InterlockedAnd16(p, val)
+
+#ifdef InterlockedIncrement16
+#undef InterlockedIncrement16
+#endif
+#define InterlockedIncrement16(p) _InterlockedIncrement16(p)
+
+#ifdef InterlockedExchange16
+#undef InterlockedExchange16
+#endif
+#define InterlockedExchange16(p, val) _InterlockedExchange16(p, val)
+
 #endif
 
 #ifdef _DEBUG
@@ -102,6 +119,7 @@ typedef struct {
 } Module;
 
 extern Module lagModule;
+extern Module BWLimiterModule;
 extern Module dropModule;
 extern Module throttleModule;
 extern Module oodModule;
